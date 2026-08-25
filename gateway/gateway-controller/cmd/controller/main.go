@@ -430,7 +430,8 @@ func main() {
 	policyVersionResolver := utils.NewLoadedPolicyVersionResolver(policyDefinitions)
 	restTransformer := transform.NewRestAPITransformer(&cfg.Router, cfg, policyDefinitions)
 	llmTransformer := transform.NewLLMTransformer(configStore, db, &cfg.Router, cfg, policyDefinitions, policyVersionResolver)
-	transformerRegistry := transform.NewRegistry(restTransformer, llmTransformer)
+	graphqlTransformer := transform.NewGraphQLAPITransformer(&cfg.Router, cfg, policyDefinitions)
+	transformerRegistry := transform.NewRegistry(restTransformer, llmTransformer, graphqlTransformer)
 	policyManager.SetTransformers(transformerRegistry)
 
 	// Wire the same transformer into the Envoy xDS translator so Envoy routes are built from the
@@ -446,6 +447,7 @@ func main() {
 		"Mcp":         transformerRegistry,
 		"LlmProvider": transformerRegistry,
 		"LlmProxy":    transformerRegistry,
+		"GraphQLApi":  transformerRegistry,
 	})
 
 	// Load runtime configs from existing API configurations on startup.
@@ -860,6 +862,12 @@ func generateAuthConfig(config *config.Config) commonmodels.AuthConfig {
 		"GET /mcp-proxies/{id}":    {"admin", "developer"},
 		"PUT /mcp-proxies/{id}":    {"admin", "developer"},
 		"DELETE /mcp-proxies/{id}": {"admin", "developer"},
+
+		"POST /graphql-apis":        {"admin", "developer"},
+		"GET /graphql-apis":         {"admin", "developer"},
+		"GET /graphql-apis/{id}":    {"admin", "developer"},
+		"PUT /graphql-apis/{id}":    {"admin", "developer"},
+		"DELETE /graphql-apis/{id}": {"admin", "developer"},
 
 		"POST /llm-provider-templates":        {"admin"},
 		"GET /llm-provider-templates":         {"admin"},
