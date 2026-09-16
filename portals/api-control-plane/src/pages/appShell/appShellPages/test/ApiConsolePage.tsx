@@ -24,7 +24,12 @@ import { ScopeGate } from '../../../../scope/ScopeGate';
 
 export function ApiConsolePage() {
   return (
-    <ScopeGate prompt="The API console runs against a single API." requires="api" to={routes.apiTestConsole}>
+    <ScopeGate
+      graphqlTo={routes.graphqlApiTestConsole}
+      prompt="The API console runs against a single API."
+      requires="api"
+      to={routes.apiTestConsole}
+    >
       <ComingSoon
         feature={
           <FormattedMessage
