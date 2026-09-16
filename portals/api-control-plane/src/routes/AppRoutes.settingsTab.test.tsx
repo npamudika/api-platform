@@ -45,7 +45,8 @@ describe('AppRoutes settingsTab extensions', () => {
       resource('/organizations/:organizationId', org),
       collection('/projects', [project]),
       resource('/projects/:projectId', project),
-      collection('/rest-apis', [])
+      collection('/rest-apis', []),
+      collection('/graphql-apis', [])
     );
   });
   afterEach(() => vi.unstubAllEnvs());
