@@ -23,13 +23,24 @@ import { defineMessages, useIntl } from 'react-intl';
 import { useNavigate } from 'react-router-dom';
 import { DefineApiPanel } from './components/DefineApiPanel';
 import { GeneralCreateApiForm } from './components/GeneralCreateApiForm';
-import { ApiCreationWizardDraftState, ApiType, GeneralApiCreationFormState } from './types';
+import { GraphqlConfigureForm } from './components/graphql/GraphqlConfigureForm';
+import { GraphqlCreationConfirmation } from './components/graphql/GraphqlCreationConfirmation';
+import { GraphqlDefinePanel } from './components/graphql/GraphqlDefinePanel';
+import {
+  ApiCreationWizardDraftState,
+  ApiType,
+  GeneralApiCreationFormState,
+  GraphqlApiCreationFormState,
+  GraphqlCreationWizardDraftState,
+} from './types';
 import { ApiTypeSelector } from './components/ApiTypeSelector';
 import { ApiCreationStepKey, ApiCreationSteps } from './components/ApiCreationSteps';
 import { useCreateRestApi } from '@/api/resources/restApis';
+import { useCreateGraphQLApi, type GraphQLApi } from '@/api/resources/graphqlApis';
 import { useConsoleScope } from '@/scope/ConsoleScopeProvider';
 import { routes } from '@/routes/paths';
 import { toCreateRestApiBody } from './utils/createRestApiBody';
+import { toCreateGraphQLApiBody } from './utils/createGraphqlApiBody';
 import { toCreateApiFormErrors, type CreateApiFormErrors } from './utils/serverFieldErrors';
 import {
   ApiCreationProgress,
@@ -98,8 +109,16 @@ export const ApiCreationWizard = () => {
     () => API_TYPES.find((candidate) => candidate.enabled) ?? null,
   );
   const [sourceDraft, setSourceDraft] = useState<ApiCreationWizardDraftState | null>(null);
+  const [graphqlSourceDraft, setGraphqlSourceDraft] =
+    useState<GraphqlCreationWizardDraftState | null>(null);
 
   const [prefilledData, setPrefilledData] = useState<Partial<GeneralApiCreationFormState>>({});
+  const [graphqlPrefilledData, setGraphqlPrefilledData] = useState<
+    Partial<GraphqlApiCreationFormState>
+  >({});
+
+  /** Whether the wizard is working with the GraphQL branch of every step below. */
+  const isGraphql = apiType?.key === 'graphql';
 
   /** Tracks whether the user has taken over the backend URL across form remounts. */
   const [upstreamEdited, setUpstreamEdited] = useState(false);
@@ -148,10 +167,16 @@ export const ApiCreationWizard = () => {
    * from the new document rather than restoring values typed against the old.
    */
   const continueFromSource = () => {
-    if (sourceDraft === null) return;
-    setPrefilledData(sourceDraft);
-    setSubmittedValues(null);
-    setUpstreamEdited(false); // A re-confirmed source brings back its own placeholder.
+    if (isGraphql) {
+      if (graphqlSourceDraft === null) return;
+      setGraphqlPrefilledData(graphqlSourceDraft);
+      setGraphqlSubmittedValues(null);
+    } else {
+      if (sourceDraft === null) return;
+      setPrefilledData(sourceDraft);
+      setSubmittedValues(null);
+      setUpstreamEdited(false); // A re-confirmed source brings back its own placeholder.
+    }
     setStep('configure');
   };
 
@@ -239,6 +264,57 @@ export const ApiCreationWizard = () => {
       ? 'created'
       : 'creating';
 
+  // `handlesErrors`: a rejection this screen puts back on the form must not
+  // also arrive as a snackbar that has faded by the time the user looks up.
+  const createGraphQLApiMutation = useCreateGraphQLApi({ handlesErrors: true });
+  const [graphqlSubmittedValues, setGraphqlSubmittedValues] =
+    useState<GraphqlApiCreationFormState | null>(null);
+  const [graphqlCreationStarted, setGraphqlCreationStarted] = useState(false);
+  const [graphqlFormErrors, setGraphqlFormErrors] = useState<CreateApiFormErrors | null>(null);
+  /**
+   * Set once creation succeeds — swaps the progress screen for a self-
+   * contained confirmation rather than navigating into the shared (REST-typed)
+   * API overview page. See the plan's scope note on `ConsoleScopeProvider`.
+   */
+  const [graphqlCreated, setGraphqlCreated] = useState<GraphQLApi | null>(null);
+
+  const createGraphqlApi = (values: GraphqlApiCreationFormState) => {
+    const projectId = activeScope.projectHandler;
+    if (!projectId) return;
+
+    setGraphqlFormErrors(null);
+    createGraphQLApiMutation.reset();
+    createGraphQLApiMutation.mutate(toCreateGraphQLApiBody(values, { projectId }), {
+      onError: (error) => {
+        const rejection = toCreateApiFormErrors(error);
+        if (!rejection) return;
+
+        setGraphqlFormErrors(rejection);
+        setGraphqlCreationStarted(false);
+      },
+    });
+  };
+
+  const onGraphqlFormSubmit = (finalData: GraphqlApiCreationFormState) => {
+    if (!activeScope.projectHandler) return;
+
+    setGraphqlSubmittedValues(finalData);
+    setGraphqlCreationStarted(true);
+    createGraphqlApi(finalData);
+  };
+
+  const handleGraphqlCreationComplete = useCallback(() => {
+    if (createGraphQLApiMutation.data) {
+      setGraphqlCreated(createGraphQLApiMutation.data);
+    }
+  }, [createGraphQLApiMutation.data]);
+
+  const graphqlCreationStatus: ApiCreationProgressStatus = createGraphQLApiMutation.isError
+    ? 'failed'
+    : createGraphQLApiMutation.isSuccess
+      ? 'created'
+      : 'creating';
+
   if (creationStarted && submittedValues) {
     return (
       <ApiCreationProgress
@@ -252,6 +328,25 @@ export const ApiCreationWizard = () => {
         onComplete={goToCreatedApi}
         onRetry={() => createApi(submittedValues)}
         status={creationStatus}
+      />
+    );
+  }
+
+  if (graphqlCreationStarted && graphqlSubmittedValues) {
+    if (graphqlCreated) {
+      return <GraphqlCreationConfirmation api={graphqlCreated} />;
+    }
+
+    return (
+      <ApiCreationProgress
+        displayName={graphqlSubmittedValues.displayName}
+        onBack={() => {
+          createGraphQLApiMutation.reset();
+          setGraphqlCreationStarted(false);
+        }}
+        onComplete={handleGraphqlCreationComplete}
+        onRetry={() => createGraphqlApi(graphqlSubmittedValues)}
+        status={graphqlCreationStatus}
       />
     );
   }
@@ -311,26 +406,42 @@ export const ApiCreationWizard = () => {
             {step !== 'apiType' && (
               <Box sx={{ display: step === 'source' ? 'block' : 'none' }}>
                 {/* Kept mounted during configuration so Back preserves the selected source and edits. */}
-                <DefineApiPanel initialApiTypeKey={apiType?.key} onDraftChange={setSourceDraft} />
+                {isGraphql ? (
+                  <GraphqlDefinePanel onDraftChange={setGraphqlSourceDraft} />
+                ) : (
+                  <DefineApiPanel initialApiTypeKey={apiType?.key} onDraftChange={setSourceDraft} />
+                )}
               </Box>
             )}
 
             {step === 'configure' && (
               <Box sx={{ maxWidth: '80%' }}>
-                <GeneralCreateApiForm
-                  formId={CONFIGURE_FORM_ID}
-                  hideActions
-                  // What the user actually submitted, when there is such an
-                  // attempt to come back from: the form remounts after the
-                  // progress screen, so anything hand-typed would otherwise
-                  // revert to the spec-derived draft.
-                  initialUpstreamEdited={upstreamEdited}
-                  initialValues={submittedValues ?? prefilledData}
-                  onUpstreamEdited={() => setUpstreamEdited(true)}
-                  onSubmit={onGeneralFormSumit}
-                  onBack={() => setStep('source')}
-                  serverErrors={formErrors ?? undefined}
-                />
+                {isGraphql ? (
+                  <GraphqlConfigureForm
+                    formId={CONFIGURE_FORM_ID}
+                    hideActions
+                    // Same reasoning as the REST form's `initialValues` below.
+                    initialValues={graphqlSubmittedValues ?? graphqlPrefilledData}
+                    onSubmit={onGraphqlFormSubmit}
+                    onBack={() => setStep('source')}
+                    serverErrors={graphqlFormErrors ?? undefined}
+                  />
+                ) : (
+                  <GeneralCreateApiForm
+                    formId={CONFIGURE_FORM_ID}
+                    hideActions
+                    // What the user actually submitted, when there is such an
+                    // attempt to come back from: the form remounts after the
+                    // progress screen, so anything hand-typed would otherwise
+                    // revert to the spec-derived draft.
+                    initialUpstreamEdited={upstreamEdited}
+                    initialValues={submittedValues ?? prefilledData}
+                    onUpstreamEdited={() => setUpstreamEdited(true)}
+                    onSubmit={onGeneralFormSumit}
+                    onBack={() => setStep('source')}
+                    serverErrors={formErrors ?? undefined}
+                  />
+                )}
               </Box>
             )}
           </Box>
@@ -363,14 +474,21 @@ export const ApiCreationWizard = () => {
           )}
           {step === 'configure' ? (
             <Button form={CONFIGURE_FORM_ID} key="create-api" type="submit" variant="contained">
-              {intl.formatMessage({
-                id: 'api.create.generalForm.action.create',
-                defaultMessage: 'Create',
-              })}
+              {intl.formatMessage(
+                isGraphql
+                  ? { id: 'api.create.graphql.configureForm.action.create', defaultMessage: 'Create' }
+                  : { id: 'api.create.generalForm.action.create', defaultMessage: 'Create' },
+              )}
             </Button>
           ) : (
             <Button
-              disabled={step === 'apiType' ? !apiType : sourceDraft === null}
+              disabled={
+                step === 'apiType'
+                  ? !apiType
+                  : isGraphql
+                    ? graphqlSourceDraft === null
+                    : sourceDraft === null
+              }
               endIcon={<ArrowRight size={16} />}
               key="continue-wizard"
               onClick={() => {

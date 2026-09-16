@@ -103,6 +103,47 @@ export const apiPath = (
   return join('organizations', orgHandle, 'projects', projectHandler, 'apis', apiHandler, suffix);
 };
 
+/**
+ * Builds a **GraphQL API-level** page's path. Mirrors `apiPath` exactly, but under the
+ * `graphql-apis` segment (matching the backend's own path) rather than `apis` — a distinct
+ * segment and param name so `consoleRouteParams`'s exact-string `apis` matcher, and therefore
+ * `ConsoleScopeProvider`'s REST-only `useRestApi` fetch, never fires for these routes. See
+ * `ScopeGate`/`ConsoleScopeProvider` for why that separation matters.
+ *
+ * These pages have no sidebar entry and are only ever reached with a concrete id (from the
+ * creation wizard's confirmation screen, or a link within the pages themselves), so unlike
+ * `apiPath` there is no scope-less alias to support — a missing `projectHandler` degrades to the
+ * project picker like every other page, but a missing `graphqlApiHandler` is not a case any
+ * caller hits in practice.
+ */
+export const graphqlApiPath = (
+  orgHandle: string,
+  projectHandler: ScopeHandle,
+  graphqlApiHandler: ScopeHandle,
+  suffix?: string,
+): string => {
+  if (!projectHandler) return projectPath(orgHandle, null, suffix);
+  if (!graphqlApiHandler) {
+    return join(
+      'organizations',
+      orgHandle,
+      'projects',
+      projectHandler,
+      SELECT_SCOPE_SEGMENT,
+      suffix,
+    );
+  }
+  return join(
+    'organizations',
+    orgHandle,
+    'projects',
+    projectHandler,
+    'graphql-apis',
+    graphqlApiHandler,
+    suffix,
+  );
+};
+
 export const routes = {
   login: '/login',
   authCallback: '/login/callback',
@@ -215,6 +256,47 @@ export const routes = {
     projectHandler: ScopeHandle = ':projectHandler',
     apiHandler: ScopeHandle = ':apiHandler',
   ) => apiPath(orgHandle, projectHandler, apiHandler, 'observability/logs'),
+  // GraphQL API-level pages — see `graphqlApiPath` for why these live under a
+  // distinct `graphql-apis` segment rather than joining the REST `api*` builders above.
+  graphqlApi: (
+    orgHandle = ':orgHandle',
+    projectHandler: ScopeHandle = ':projectHandler',
+    graphqlApiHandler: ScopeHandle = ':graphqlApiHandler',
+  ) => graphqlApiPath(orgHandle, projectHandler, graphqlApiHandler),
+  // Only reachable from the detail page's own edit button, so — like
+  // `apiEdit` — it takes only its fully-scoped path, no alias.
+  graphqlApiEdit: (
+    orgHandle = ':orgHandle',
+    projectHandler: ScopeHandle = ':projectHandler',
+    graphqlApiHandler: ScopeHandle = ':graphqlApiHandler',
+  ) => graphqlApiPath(orgHandle, projectHandler, graphqlApiHandler, 'edit'),
+  graphqlApiDeploy: (
+    orgHandle = ':orgHandle',
+    projectHandler: ScopeHandle = ':projectHandler',
+    graphqlApiHandler: ScopeHandle = ':graphqlApiHandler',
+  ) => graphqlApiPath(orgHandle, projectHandler, graphqlApiHandler, 'deploy'),
+  graphqlApiTestConsole: (
+    orgHandle = ':orgHandle',
+    projectHandler: ScopeHandle = ':projectHandler',
+    graphqlApiHandler: ScopeHandle = ':graphqlApiHandler',
+  ) => graphqlApiPath(orgHandle, projectHandler, graphqlApiHandler, 'test/console'),
+  // Develop's two GraphQL-relevant panels — no Routing/Resources equivalent:
+  // a GraphQL API has a single endpoint, not a per-operation resource list.
+  graphqlApiDevelopPolicies: (
+    orgHandle = ':orgHandle',
+    projectHandler: ScopeHandle = ':projectHandler',
+    graphqlApiHandler: ScopeHandle = ':graphqlApiHandler',
+  ) => graphqlApiPath(orgHandle, projectHandler, graphqlApiHandler, 'develop/policies'),
+  graphqlApiDevelopDocuments: (
+    orgHandle = ':orgHandle',
+    projectHandler: ScopeHandle = ':projectHandler',
+    graphqlApiHandler: ScopeHandle = ':graphqlApiHandler',
+  ) => graphqlApiPath(orgHandle, projectHandler, graphqlApiHandler, 'develop/documents'),
+  graphqlApiPublish: (
+    orgHandle = ':orgHandle',
+    projectHandler: ScopeHandle = ':projectHandler',
+    graphqlApiHandler: ScopeHandle = ':graphqlApiHandler',
+  ) => graphqlApiPath(orgHandle, projectHandler, graphqlApiHandler, 'publish'),
   organizationPortals: (orgHandle = ':orgHandle') => `/organizations/${orgHandle}/portals`,
   projectPortals: (orgHandle = ':orgHandle', projectHandler = ':projectHandler') =>
     projectPath(orgHandle, projectHandler, 'portals'),
