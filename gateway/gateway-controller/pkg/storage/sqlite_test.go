@@ -885,6 +885,104 @@ func TestSQLite_UpgradeAddsCertificateUsageColumns(t *testing.T) {
 	assert.DeepEqual(t, savedRelay.Match.DNSSANs, relayCert.Match.DNSSANs)
 }
 
+// tablesAddedWithoutVersionBump are resource tables added to the schema after
+// the version it stamps, so a database created by an older release lacks them.
+var tablesAddedWithoutVersionBump = []string{"graphql_apis", "websocket_apis"}
+
+// openAsOlderDatabase creates a database with the current schema and a saved
+// RestApi, then turns it back into what an older release left on disk: the
+// tables in tablesAddedWithoutVersionBump dropped, the given statements run,
+// and user_version set. It returns the path and the saved config's UUID.
+func openAsOlderDatabase(t *testing.T, version int, extraDowngrade ...string) (string, string) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "older.db")
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	metrics.Init()
+
+	store, err := NewStorage(BackendConfig{Type: "sqlite", SQLitePath: dbPath, GatewayID: "platform-gateway-id"}, logger)
+	assert.NilError(t, err)
+	cfg := createTestStoredConfig()
+	assert.NilError(t, store.SaveConfig(cfg))
+	assert.NilError(t, store.(*sqlStore).db.Close())
+
+	rawDB, err := sql.Open("sqlite3", dbPath)
+	assert.NilError(t, err)
+	for _, table := range tablesAddedWithoutVersionBump {
+		_, err = rawDB.Exec("DROP TABLE " + table)
+		assert.NilError(t, err)
+	}
+	for _, stmt := range extraDowngrade {
+		_, err = rawDB.Exec(stmt)
+		assert.NilError(t, err)
+	}
+	_, err = rawDB.Exec(fmt.Sprintf("PRAGMA user_version = %d", version))
+	assert.NilError(t, err)
+	assert.NilError(t, rawDB.Close())
+	return dbPath, cfg.UUID
+}
+
+// assertUpgradedDatabaseLoads reopens dbPath and checks what the controller's
+// startup load needs: every resource table exists, the cross-kind listing that
+// LoadFromDatabase runs succeeds, the pre-upgrade row survives, and a
+// WebSocketApi can be stored.
+func assertUpgradedDatabaseLoads(t *testing.T, dbPath, existingUUID string) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	upgraded, err := NewStorage(BackendConfig{Type: "sqlite", SQLitePath: dbPath, GatewayID: "platform-gateway-id"}, logger)
+	assert.NilError(t, err)
+	sqlDB := upgraded.(*sqlStore).db
+	defer sqlDB.Close()
+
+	for _, table := range tablesAddedWithoutVersionBump {
+		var name string
+		err := sqlDB.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+		assert.NilError(t, err, "table %s was not created on upgrade", table)
+	}
+
+	var version int
+	assert.NilError(t, sqlDB.QueryRow("PRAGMA user_version").Scan(&version))
+	assert.Equal(t, version, currentSchemaVersion)
+
+	configs, err := upgraded.GetAllConfigs()
+	assert.NilError(t, err)
+	found := false
+	for _, c := range configs {
+		if c.UUID == existingUUID {
+			found = true
+		}
+	}
+	assert.Assert(t, found, "the RestApi saved before the upgrade is missing after it")
+
+	ws := createTestStoredConfig()
+	ws.Kind = string(api.WebSocketAPIKindWebSocketApi)
+	assert.NilError(t, upgraded.SaveConfig(ws))
+	got, err := upgraded.GetConfig(ws.UUID)
+	assert.NilError(t, err)
+	assert.Equal(t, got.Kind, string(api.WebSocketAPIKindWebSocketApi))
+}
+
+// A database created by the release before the current schema version (v5, as
+// shipped in gateway 2026.09.24) has neither graphql_apis nor websocket_apis.
+// Before the schema was re-applied after migration, the controller migrated it
+// and then exited on "no such table: websocket_apis" at every startup.
+func TestSQLite_UpgradeFromPreviousVersionCreatesNewResourceTables(t *testing.T) {
+	dbPath, uuid := openAsOlderDatabase(t, previousSchemaVersion,
+		"ALTER TABLE certificates DROP COLUMN usage",
+		"ALTER TABLE certificates DROP COLUMN role",
+		"ALTER TABLE certificates DROP COLUMN match_json",
+		"ALTER TABLE certificates DROP COLUMN private_key_ciphertext",
+		"ALTER TABLE certificates DROP COLUMN key_algorithm",
+	)
+	assertUpgradedDatabaseLoads(t, dbPath, uuid)
+}
+
+// A database already at the current version but created before these tables
+// were added to it gets them on the next start too.
+func TestSQLite_ReopenAtCurrentVersionCreatesMissingResourceTables(t *testing.T) {
+	dbPath, uuid := openAsOlderDatabase(t, currentSchemaVersion)
+	assertUpgradedDatabaseLoads(t, dbPath, uuid)
+}
+
 func TestSQLiteStorage_GetAPIKeyByID_NotFound(t *testing.T) {
 	storage := setupTestStorage(t)
 	defer storage.db.Close()

@@ -105,6 +105,20 @@ func (s *SQLiteStorage) initSchema() error {
 		return fmt.Errorf("unsupported schema version %d, expected %d; delete the database to recreate", version, currentSchemaVersion)
 	}
 
+	// An existing database (migrated above, or already at the current version)
+	// only ever ran the schema of the release that created it, so a table or
+	// index added since without a version bump — graphql_apis, websocket_apis —
+	// is missing from it, and the startup load fails on the first query that
+	// touches it. Every statement in the schema is a guarded CREATE ... IF NOT
+	// EXISTS, so re-applying it creates exactly what is missing and leaves
+	// existing tables and rows untouched. Column changes still need a migration:
+	// CREATE TABLE IF NOT EXISTS never alters a table that exists.
+	if version != 0 {
+		if _, err := s.db.Exec(schemaSQL); err != nil {
+			return fmt.Errorf("failed to apply schema additions: %w", err)
+		}
+	}
+
 	s.logger.Info("Database schema up to date", slog.Int("version", currentSchemaVersion))
 	return nil
 }
